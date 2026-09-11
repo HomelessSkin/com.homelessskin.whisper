@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+
 using Whisper.Native;
 
 namespace Whisper
@@ -17,7 +18,7 @@ namespace Whisper
             Segments = segments;
             LanguageId = languageId;
             Language = WhisperLanguage.GetLanguageString(languageId);
-            
+
             // generate full string based on segments
             var builder = new StringBuilder();
             foreach (var seg in segments)
@@ -38,17 +39,17 @@ namespace Whisper
         /// Segment index in current Whisper context.
         /// </summary>
         public readonly int Index;
-        
+
         /// <summary>
         /// Combined text of all tokens in this segment.
         /// </summary>
         public readonly string Text;
-        
+
         /// <summary>
         /// Segment start timestamp based on transcribed audio.
         /// </summary>
         public readonly TimeSpan Start;
-        
+
         /// <summary>
         /// Segment end timestamp based on transcribed audio.
         /// </summary>
@@ -106,22 +107,14 @@ namespace Whisper
         /// True if this token is special token used by whisper, like [EOT], [BEG], etc.
         /// </summary>
         public readonly bool IsSpecial;
-        /// <summary>
-        /// Optional token timestamp information.
-        /// Null if params <see cref="WhisperParams.TokenTimestamps"/> is false.
-        /// </summary>
-        public readonly WhisperTokenTimestamp Timestamp;
 
-        public WhisperTokenData(WhisperNativeTokenData nativeToken, string text, bool timestamps, bool isSpecial)
+        public WhisperTokenData(WhisperNativeTokenData nativeToken, string text, bool isSpecial)
         {
             Id = nativeToken.id;
             Prob = nativeToken.p;
             ProbLog = nativeToken.plog;
             Text = text;
             IsSpecial = isSpecial;
-
-            if (timestamps)
-                Timestamp = new WhisperTokenTimestamp(nativeToken);
         }
     }
 
@@ -137,7 +130,7 @@ namespace Whisper
         /// <summary>
         /// Probability (confidence) of the timestamp in [0, 1] range.
         /// </summary>
-        public readonly float Prob; 
+        public readonly float Prob;
         /// <summary>
         /// Sum of probabilities of all timestamp tokens.
         /// </summary>

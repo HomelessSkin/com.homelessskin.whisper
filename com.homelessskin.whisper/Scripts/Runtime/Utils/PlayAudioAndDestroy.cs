@@ -1,20 +1,20 @@
-using System;
 using UnityEngine;
 
-namespace Whisper.Utils
+namespace Whisper
 {
     /// <summary>
     /// Plays audio once and destroy itself and audio clip.
     /// </summary>
     public class PlayAudioAndDestroy : MonoBehaviour
     {
-        private AudioSource _source;
+        AudioSource _source;
 
-        private void Update()
+        void Update()
         {
             if (!_source)
             {
                 Destroy(gameObject);
+
                 return;
             }
 
@@ -22,6 +22,7 @@ namespace Whisper.Utils
             {
                 if (_source.clip)
                     Destroy(_source.clip);
+
                 Destroy(gameObject);
             }
         }

@@ -1,9 +1,12 @@
 using System.IO;
 using System.Threading.Tasks;
+
+using Core;
+
 using UnityEngine;
 using UnityEngine.Networking;
 
-namespace Whisper.Utils
+namespace Whisper
 {
     public static class FileUtils
     {
@@ -17,13 +20,14 @@ namespace Whisper.Utils
 #else
             if (!File.Exists(path))
             {
-                LogUtils.Error($"Path {path} doesn't exist!");
+                Log.Error(path, $"Path {path} doesn't exist!");
+
                 return null;
             }
+
             return File.ReadAllBytes(path);
 #endif
         }
-        
         /// <summary>
         /// Async read file on any platform.
         /// </summary>
@@ -34,13 +38,14 @@ namespace Whisper.Utils
 #else
             if (!File.Exists(path))
             {
-                LogUtils.Error($"File: '{path}' doesn't exist!");
+                Log.Error(path, $"File: '{path}' doesn't exist!");
+
                 return null;
             }
+
             return await ReadAllBytesAsync(path);
 #endif
         }
-
         /// <summary>
         /// Read Android file using "web-request".
         /// </summary>
@@ -48,9 +53,10 @@ namespace Whisper.Utils
         {
             var request = UnityWebRequest.Get(path);
             request.SendWebRequest();
-            
-            while (!request.isDone) {}
-            
+
+            while (!request.isDone)
+            { }
+
             if (HasError(request))
             {
                 Debug.LogError($"Error while opening weights at {path}!");
@@ -61,7 +67,6 @@ namespace Whisper.Utils
 
             return request.downloadHandler.data;
         }
-        
         /// <summary>
         /// Async read Android file using "web-request".
         /// </summary>
@@ -82,7 +87,7 @@ namespace Whisper.Utils
         }
 
         // to suppress obsolete warning
-        private static bool HasError(UnityWebRequest request)
+        static bool HasError(UnityWebRequest request)
         {
 #if UNITY_2020_1_OR_NEWER
             return request.result != UnityWebRequest.Result.Success;
@@ -90,9 +95,8 @@ namespace Whisper.Utils
             return request.isHttpError || request.isNetworkError;
 #endif
         }
-        
         // to support .NET Standard 2.0
-        private static async Task<byte[]> ReadAllBytesAsync(string path)
+        static async Task<byte[]> ReadAllBytesAsync(string path)
         {
 #if UNITY_2021_2_OR_NEWER 
             return await File.ReadAllBytesAsync(path);
