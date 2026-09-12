@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+
+using AOT;
 
 using Core;
 
@@ -8,105 +12,81 @@ using Unity.Collections;
 
 using UnityEngine;
 
-using Whisper.Native;
-using Whisper.Utils;
-
 namespace Whisper
 {
-    /// <summary>
-    /// Manages Whisper model lifecycle in Unity scene.
-    /// </summary>
     public class WhisperManager : MonoBehaviour
     {
         [Header("Model")]
-        [SerializeField] bool initOnAwake = true;
-        [SerializeField] bool isModelPathInStreamingAssets = true;
-        [SerializeField] string modelPath = "Whisper/ggml-tiny.bin";
+        [SerializeField] bool PathInStreamingAssets = true;
+        [SerializeField] string ModelPath = "Whisper/ggml-tiny.bin";
 
         [Header("Inference")]
-        [SerializeField] bool useGpu;
-        [SerializeField] bool flashAttention;
+        [SerializeField] bool UseGpu;
+        [SerializeField] bool FlashAttention;
 
         [Header("Language")]
-        [SerializeField] bool translateToEnglish;
-        [SerializeField] string language = "en";
+        [SerializeField] bool TranslateToEnglish;
+        [SerializeField] string Language = "en";
 
         [Header("Advanced settings")]
-        [SerializeField] WhisperSamplingStrategy strategy = WhisperSamplingStrategy.WHISPER_SAMPLING_GREEDY;
+        [SerializeField] WhisperSamplingStrategy Strategy = WhisperSamplingStrategy.WHISPER_SAMPLING_GREEDY;
 
-        [Header("Streaming settings")]
-        [SerializeField] float stepSec = 3f;
-        [SerializeField] float keepSec = 0.2f;
-        [SerializeField] float lengthSec = 10f;
+        [Space]
+        [SerializeField] float BusyTime = 5f;
 
-        /// <summary>
-        /// Raised when whisper transcribed a new text segment from audio. 
-        /// </summary>
-        public event OnNewSegmentDelegate OnNewSegment;
-        /// <summary>
-        /// Raised when whisper made some progress in transcribing audio.
-        /// Progress changes from 0 to 100 included.
-        /// </summary>
-        public event OnProgressDelegate OnProgress;
+        float BusyTimer;
+        IntPtr Ctx = IntPtr.Zero;
 
-        WhisperWrapper _whisper;
-        WhisperParams _params;
+        WhisperParams Params;
 
-        readonly MainThreadDispatcher _dispatcher = new MainThreadDispatcher();
+        ConcurrentQueue<Task> Actions = new ConcurrentQueue<Task>();
 
-        public string ModelPath
-        {
-            get => modelPath;
-            set
-            {
-                if (IsLoaded || IsLoading)
-                {
-                    throw new InvalidOperationException("Cannot change model path after loading the model");
-                }
-
-                modelPath = value;
-            }
-        }
-        public bool IsModelPathInStreamingAssets
-        {
-            get => isModelPathInStreamingAssets;
-            set
-            {
-                if (IsLoaded || IsLoading)
-                {
-                    throw new InvalidOperationException("Cannot change model path after loading the model");
-                }
-
-                isModelPathInStreamingAssets = value;
-            }
-        }
-        /// <summary>
-        /// Checks if whisper weights are loaded and ready to be used.
-        /// </summary>
-        public bool IsLoaded => _whisper != null;
-        /// <summary>
-        /// Checks if whisper weights are still loading and not ready.
-        /// </summary>
-        public bool IsLoading { get; private set; }
+        bool IsLoaded => Ctx != IntPtr.Zero;
 
         void Start()
         {
-            if (!initOnAwake)
-                return;
-
             InitModel();
         }
         void Update()
         {
-            _dispatcher.Update();
+            QueueUpdate();
+
+            if (BusyTimer > 0f)
+                BusyTimer -= Time.deltaTime;
         }
 
-        /// <summary>
-        /// Load model and default parameters. Prepare it for text transcription.
-        /// </summary>
-        public void InitModel()
+        public async void GetText(NativeArray<float> samples, int frequency, int channels)
         {
-            // check if model is already loaded or actively loading
+            if (!CheckLoaded() || BusyTimer > 0f || Actions.Count > 0 || samples.Length < 20000)
+                return;
+
+            BusyTimer += BusyTime;
+
+            await InferenceWhisper(samples);
+        }
+
+        async Task InferenceWhisper(NativeArray<float> samples)
+        {
+            var array = samples.ToArray();
+
+            Log.Info(this, $"Starting Inference with {samples.Length} samples.");
+
+            await Task.Run(() =>
+            {
+                unsafe
+                {
+                    fixed (float* samplesPtr = array)
+                    {
+                        var code = WhisperNative.whisper_full(Ctx, Params.NativeParams, samplesPtr, samples.Length);
+                        if (code != 0)
+                            Log.Error(this, $"Whisper failed to process data! Error code: {code}.");
+                    }
+                }
+            });
+        }
+
+        void InitModel()
+        {
             if (IsLoaded)
             {
                 Log.Warning(this, "Whisper model is already loaded and ready for use!");
@@ -114,40 +94,69 @@ namespace Whisper
                 return;
             }
 
-            if (IsLoading)
-            {
-                Log.Warning(this, "Whisper model is already loading!");
+            var path = PathInStreamingAssets
+                ? Path.Combine(Application.streamingAssetsPath, ModelPath)
+                : ModelPath;
 
-                return;
-            }
-
-            // load model and default params
-            IsLoading = true;
-            try
-            {
-                var path = isModelPathInStreamingAssets
-                    ? Path.Combine(Application.streamingAssetsPath, modelPath)
-                    : modelPath;
-
-                _whisper = WhisperWrapper.InitFromFile(path, CreateContextParams());
-                _params = WhisperParams.GetDefaultParams(strategy);
-
-                UpdateParams();
-
-                _whisper.OnNewSegment += OnNewSegmentHandler;
-                _whisper.OnProgress += OnProgressHandler;
-            }
-            catch (Exception e)
-            {
-                Log.Error(this, e.Message);
-            }
-
-            IsLoading = false;
+            Ctx = InitFromFile(path, CreateContextParams());
+            if (Ctx == IntPtr.Zero)
+                Log.Error(this, $"Error!");
+            else
+                GetParams();
         }
-        /// <summary>
-        /// Checks if currently loaded whisper model supports multilingual transcription.
-        /// </summary>
-        public bool IsMultilingual()
+        void GetParams()
+        {
+            var nativeParams = WhisperNative.whisper_full_default_params(Strategy);
+
+            var userData = new WhisperUserData(this);
+
+            if (nativeParams.new_segment_callback == null &&
+                 nativeParams.new_segment_callback_user_data == IntPtr.Zero)
+            {
+                nativeParams.new_segment_callback = NewSegmentCallbackStatic;
+                nativeParams.new_segment_callback_user_data = GCHandle.ToIntPtr(GCHandle.Alloc(userData));
+            }
+
+            nativeParams.translate = TranslateToEnglish;
+
+            nativeParams.n_threads = 1;
+            nativeParams.n_max_text_ctx = 0;
+            nativeParams.no_context =
+            nativeParams.single_segment =
+            true;
+
+            nativeParams.print_progress =
+            nativeParams.print_realtime =
+            nativeParams.print_timestamps =
+            false;
+
+            unsafe
+            {
+                nativeParams.language = (byte*)Marshal.StringToHGlobalAnsi(Language);
+            }
+
+            Params = new WhisperParams(nativeParams);
+
+            Log.Info(nativeParams, "Default params generated!");
+        }
+        void LogText(WhisperSegment segment)
+        {
+            Log.Info(this, $"{segment.Text}");
+        }
+        void QueueUpdate()
+        {
+            while (Actions.TryDequeue(out var task))
+            {
+                BusyTimer = BusyTime;
+
+                task.RunSynchronously();
+            }
+        }
+        void QueueActions(Action action)
+        {
+            Actions.Enqueue(new Task(action));
+        }
+        bool CheckLoaded()
         {
             if (!IsLoaded)
             {
@@ -156,106 +165,101 @@ namespace Whisper
                 return false;
             }
 
-            return _whisper.IsMultilingual;
+            return true;
         }
-        /// <summary>
-        /// Start async transcription of audio buffer.
-        /// </summary>
-        /// <param name="samples">Raw audio buffer.</param>
-        /// <param name="frequency">Audio sample rate.</param>
-        /// <param name="channels">Audio channels count.</param>
-        /// <returns>Full audio transcript. Null if transcription failed.</returns>
-        public async void GetTextAsync(NativeArray<float> samples, int frequency, int channels)
+        WhisperSegment GetSegment(int i)
         {
-            var isLoaded = await CheckIfLoaded();
-            if (!isLoaded)
-                return;
+            var textPtr = WhisperNative.whisper_full_get_segment_text(Ctx, i);
+            var text = TextUtils.StringFromNativeUtf8(textPtr);
 
-            UpdateParams();
-
-            await _whisper.GetTextAsync(samples, frequency, channels, _params);
-        }
-        /// <summary>
-        /// Create a new instance of Whisper streaming transcription.
-        /// </summary>
-        /// <param name="frequency">Audio sample rate.</param>
-        /// <param name="channels">Audio channels count.</param>
-        /// <returns>New streaming transcription. Null if failed.</returns>
-        public async Task<WhisperStream> CreateStream(int frequency, int channels)
-        {
-            var isLoaded = await CheckIfLoaded();
-            if (!isLoaded)
-            {
-                Log.Error(this, "Model weights aren't loaded! Load model first!");
-
-                return null;
-            }
-
-            var param = new WhisperStreamParams(_params, frequency, channels, stepSec, keepSec, lengthSec);
-
-            return new WhisperStream(_whisper, param);
-        }
-        /// <summary>
-        /// Create a new instance of Whisper streaming transcription from microphone input.
-        /// </summary>
-        /// <returns>New streaming transcription. Null if failed.</returns>
-        public async Task<WhisperStream> CreateStream(MicrophoneRecord microphone)
-        {
-            var isLoaded = await CheckIfLoaded();
-            if (!isLoaded)
-            {
-                Log.Error(this, "Model weights aren't loaded! Load model first!");
-
-                return null;
-            }
-
-            // TODO: unity support only single input channel for microphone
-            var param = new WhisperStreamParams(_params, microphone.frequency, 1, stepSec, keepSec, lengthSec);
-
-            return new WhisperStream(_whisper, param, microphone);
-        }
-
-        void UpdateParams()
-        {
-            _params.Language = language;
-            _params.Translate = translateToEnglish;
+            return new WhisperSegment(i, text);
         }
         WhisperContextParams CreateContextParams()
         {
             var context = WhisperContextParams.GetDefaultParams();
-            context.UseGpu = useGpu;
-            context.FlashAttn = flashAttention;
+            context.UseGpu = UseGpu;
+            context.FlashAttn = FlashAttention;
 
             return context;
         }
-        async Task<bool> CheckIfLoaded()
-        {
-            if (!IsLoaded && !IsLoading)
-            {
-                Log.Error(this, "Whisper model isn't loaded! Init Whisper model first!");
 
-                return false;
+        [MonoPInvokeCallback(typeof(whisper_new_segment_callback))]
+        static void NewSegmentCallbackStatic(IntPtr ctx, IntPtr state, int nNew, IntPtr userDataPtr)
+        {
+            var userData = (WhisperUserData)GCHandle.FromIntPtr(userDataPtr).Target;
+            userData.Wrapper.NewSegmentCallback(nNew);
+        }
+        void NewSegmentCallback(int nNew)
+        {
+            var nSegments = WhisperNative.whisper_full_n_segments(Ctx);
+            var s0 = nSegments - nNew;
+
+            for (var i = s0; i < nSegments; i++)
+            {
+                var segment = GetSegment(i);
+                QueueActions(() => LogText(segment));
+            }
+        }
+
+        IntPtr InitFromFile(string modelPath, WhisperContextParams contextParams)
+        {
+            // load model weights
+            Log.Info(contextParams, $"Trying to load Whisper model from {modelPath}...");
+            var buffer = FileUtils.ReadFile(modelPath);
+            if (buffer == null)
+                return IntPtr.Zero;
+
+            return InitFromBuffer(buffer, contextParams);
+        }
+        IntPtr InitFromBuffer(byte[] buffer, WhisperContextParams contextParams)
+        {
+            var ctx = IntPtr.Zero;
+            Log.Info(contextParams, $"Trying to load Whisper model from buffer...");
+            if (buffer == null || buffer.Length == 0)
+            {
+                Log.Error(contextParams, "Whisper model buffer is null or empty!");
+
+                return ctx;
             }
 
-            // wait while model still loading
-            while (IsLoading)
-                await Task.Yield();
+            // we need to write buffer length as size_t
+            // UIntPtr will work because size_t is size of pointer
+            var length = new UIntPtr((uint)buffer.Length);
 
-            return IsLoaded;
-        }
-        void OnNewSegmentHandler(WhisperSegment segment)
-        {
-            _dispatcher.Execute(() =>
+            unsafe
             {
-                OnNewSegment?.Invoke(segment);
-            });
+                // this only works because whisper makes copy of the buffer
+                fixed (byte* bufferPtr = buffer)
+                {
+                    ctx = WhisperNative.whisper_init_from_buffer_with_params((IntPtr)bufferPtr,
+                        length, contextParams.NativeParams);
+                }
+            }
+
+            return ctx;
         }
-        void OnProgressHandler(int progress)
+        async Task<IntPtr> InitFromFileAsync(string modelPath, WhisperContextParams contextParams)
         {
-            _dispatcher.Execute(() =>
+            Log.Info(contextParams, $"Trying to load Whisper model from {modelPath}...");
+            var buffer = await FileUtils.ReadFileAsync(modelPath);
+            if (buffer == null)
+                return IntPtr.Zero;
+
+            return await InitFromBufferAsync(buffer, contextParams);
+        }
+        async Task<IntPtr> InitFromBufferAsync(byte[] buffer, WhisperContextParams contextParams)
+        {
+            return await Task.Factory.StartNew(() => InitFromBuffer(buffer, contextParams));
+        }
+
+        struct WhisperUserData
+        {
+            public readonly WhisperManager Wrapper;
+
+            public WhisperUserData(WhisperManager wrapper)
             {
-                OnProgress?.Invoke(progress);
-            });
+                Wrapper = wrapper;
+            }
         }
     }
 }

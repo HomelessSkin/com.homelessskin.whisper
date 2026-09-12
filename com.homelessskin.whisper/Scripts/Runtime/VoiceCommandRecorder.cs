@@ -116,15 +116,14 @@ namespace Whisper
                     LastVoiceSample = currentPos;
                     SilenceTimer = 0f;
                 }
+                else if (Time.time - RecordingStartTime >= MaxCommandDuration)
+                    EndRecording(currentPos);
                 else
                 {
                     SilenceTimer += Time.deltaTime;
                     if (SilenceTimer >= SilenceDuration)
                         EndRecording(LastVoiceSample);
                 }
-
-                if (Time.time - RecordingStartTime >= MaxCommandDuration)
-                    EndRecording(currentPos);
                 break;
             }
         }
@@ -172,20 +171,10 @@ namespace Whisper
             .Schedule(length, length / JobsUtility.JobWorkerCount)
             .Complete();
 
-            var echoClip = AudioClip.Create("echo", result.Length, MicClip.channels, MicClip.frequency, false);
-            if (echoClip.SetData(result, 0))
-            {
-                Manager.GetTextAsync(result, MicClip.frequency, MicClip.channels);
+            Manager.GetText(result, MicClip.frequency, MicClip.channels);
 
-                if (Echo)
-                    PlayAudioAndDestroy.Play(echoClip, Vector3.zero);
-            }
-            else
-            {
-                Log.Error(this, "Setting Data to Echo Clip Error!");
-
-                Destroy(echoClip);
-            }
+            if (Echo)
+                PlayAudioAndDestroy.Play(AudioClip.Create("echo", result.Length, MicClip.channels, MicClip.frequency, false), Vector3.zero);
 
             result.Dispose();
             fullBuffer.Dispose();

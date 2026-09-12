@@ -1,17 +1,18 @@
 using System;
 using System.Runtime.InteropServices;
+
+using whisper_context_ptr = System.IntPtr;
+using whisper_state_ptr = System.IntPtr;
+using whisper_token = System.Int32;
 // ReSharper disable InconsistentNaming
 // ReSharper disable FieldCanBeMadeReadOnly.Local
 // ReSharper disable IdentifierTypo
 // ReSharper disable CommentTypo
 
 using whisper_token_ptr = System.IntPtr;
-using whisper_context_ptr = System.IntPtr;
-using whisper_state_ptr = System.IntPtr;
-using whisper_token = System.Int32;
 
 
-namespace Whisper.Native
+namespace Whisper
 {
     public enum WhisperSamplingStrategy
     {
@@ -41,13 +42,6 @@ namespace Whisper.Native
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     public delegate void whisper_new_segment_callback(whisper_context_ptr ctx, whisper_state_ptr state,
         int n_new, IntPtr user_data);
-    
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    public delegate void whisper_progress_callback(whisper_context_ptr ctx, whisper_state_ptr state,
-        int progress, IntPtr user_data);
-    
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate bool whisper_abort_callback(IntPtr user_data);
 
     /// <summary>
     /// This is direct copy of C++ struct.
@@ -55,7 +49,7 @@ namespace Whisper.Native
     /// Check <see cref="WhisperTokenData"/> for more information.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public struct WhisperNativeTokenData 
+    public struct WhisperNativeTokenData
     {
         public whisper_token id;  // token id
         public whisper_token tid; // forced timestamp token id
@@ -163,8 +157,8 @@ namespace Whisper.Native
         [MarshalAs(UnmanagedType.U1)] bool detect_language;
 
         // common decoding parameters:
-        [MarshalAs(UnmanagedType.U1)] bool suppress_blank; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/decoding.py#L89
-        [MarshalAs(UnmanagedType.U1)] bool suppress_non_speech_tokens; // ref: https://github.com/openai/whisper/blob/7858aa9c08d98f75575035ecd6481f462d66ca27/whisper/tokenizer.py#L224-L253
+        [MarshalAs(UnmanagedType.U1)] public bool suppress_blank; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/decoding.py#L89
+        [MarshalAs(UnmanagedType.U1)] public bool suppress_non_speech_tokens; // ref: https://github.com/openai/whisper/blob/7858aa9c08d98f75575035ecd6481f462d66ca27/whisper/tokenizer.py#L224-L253
 
         float temperature; // initial decoding temperature, ref: https://ai.stackexchange.com/a/32478
         float max_initial_ts; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/decoding.py#L97
@@ -199,16 +193,16 @@ namespace Whisper.Native
         public IntPtr new_segment_callback_user_data;
 
         // called on each progress update
-        public whisper_progress_callback progress_callback;
-        public IntPtr progress_callback_user_data;
+        void* progress_callback;
+        void* progress_callback_user_data;
 
         // called each time before the encoder starts
         void* encoder_begin_callback;
         void* encoder_begin_callback_user_data;
 
         // called each time before ggml computation starts
-        public whisper_abort_callback abort_callback;
-        public IntPtr abort_callback_user_data;
+        void* abort_callback;
+        void* abort_callback_user_data;
 
         // called by each decoder to filter obtained logits
         void* logits_filter_callback;

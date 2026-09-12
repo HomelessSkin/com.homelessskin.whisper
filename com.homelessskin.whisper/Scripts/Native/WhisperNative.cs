@@ -1,23 +1,19 @@
 using System;
 using System.Runtime.InteropServices;
-using UnityEngine;
+
 // ReSharper disable InconsistentNaming
 using whisper_context_ptr = System.IntPtr;
 using whisper_token = System.Int32;
 
-namespace Whisper.Native
+namespace Whisper
 {
     /// <summary>
     /// Bindings to native whisper.cpp functions.
     /// </summary>
     public static unsafe class WhisperNative
     {
-#if (UNITY_IOS || UNITY_VISIONOS || UNITY_ANDROID) && !UNITY_EDITOR
-        private const string LibraryName = "__Internal";
-#else
-        private const string LibraryName = "libwhisper";
-#endif
-        
+        const string LibraryName = "libwhisper";
+
         [DllImport(LibraryName)]
         public static extern whisper_context_ptr whisper_init_from_buffer_with_params(IntPtr buffer,
             UIntPtr buffer_size, WhisperNativeContextParams @params);
