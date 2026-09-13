@@ -17,31 +17,51 @@ namespace Whisper
     public class WhisperManager : MonoBehaviour
     {
         [Header("Model")]
-        [SerializeField] bool PathInStreamingAssets = true;
         [SerializeField] string ModelPath = "Whisper/ggml-tiny.bin";
 
         [Header("Inference")]
-        [SerializeField] bool UseGpu;
-        [SerializeField] bool FlashAttention;
-
-        [Header("Language")]
+        [SerializeField] WhisperSamplingStrategy Strategy = WhisperSamplingStrategy.WHISPER_SAMPLING_GREEDY;
         [SerializeField] bool TranslateToEnglish;
         [SerializeField] string Language = "en";
-
-        [Header("Advanced settings")]
-        [SerializeField] WhisperSamplingStrategy Strategy = WhisperSamplingStrategy.WHISPER_SAMPLING_GREEDY;
+        [SerializeField] bool UseGpu;
+        [SerializeField] bool FlashAttention;
+        [SerializeField] int ThreadsNumber = 1;
+        [SerializeField] float TemperatureInc;
+        [SerializeField] float EntropyThold;
+        [SerializeField] float LogprobThold;
+        [SerializeField] float NoSpeechThold;
 
         [Space]
         [SerializeField] float BusyTime = 5f;
 
-        float BusyTimer;
-        IntPtr Ctx = IntPtr.Zero;
+        bool isBusy;
+        bool IsBusy
+        {
+            get => isBusy;
+            set
+            {
+                if (value || Commands > 0)
+                {
+                    isBusy = true;
+                    BusyTimer = BusyTime;
 
-        WhisperParams Params;
+                    return;
+                }
+
+                isBusy = value;
+            }
+        }
+
+        int Commands = 0;
+        float BusyTimer;
+
+        WhisperNativeContextParams ContextParams;
+        WhisperNativeParams WhisperParams;
 
         ConcurrentQueue<Task> Actions = new ConcurrentQueue<Task>();
 
         bool IsLoaded => Ctx != IntPtr.Zero;
+        IntPtr Ctx = IntPtr.Zero;
 
         void Start()
         {
@@ -53,14 +73,22 @@ namespace Whisper
 
             if (BusyTimer > 0f)
                 BusyTimer -= Time.deltaTime;
+            else
+                IsBusy = false;
+        }
+        void OnDestroy()
+        {
+            if (IsLoaded)
+                WhisperNative.whisper_free(Ctx);
         }
 
         public async void GetText(NativeArray<float> samples, int frequency, int channels)
         {
-            if (!CheckLoaded() || BusyTimer > 0f || Actions.Count > 0 || samples.Length < 20000)
+            if (!CheckLoaded() || IsBusy || samples.Length < 20000)
                 return;
 
-            BusyTimer += BusyTime;
+            IsBusy = true;
+            Commands++;
 
             await InferenceWhisper(samples);
         }
@@ -77,7 +105,7 @@ namespace Whisper
                 {
                     fixed (float* samplesPtr = array)
                     {
-                        var code = WhisperNative.whisper_full(Ctx, Params.NativeParams, samplesPtr, samples.Length);
+                        var code = WhisperNative.whisper_full(Ctx, WhisperParams, samplesPtr, samples.Length);
                         if (code != 0)
                             Log.Error(this, $"Whisper failed to process data! Error code: {code}.");
                     }
@@ -94,50 +122,51 @@ namespace Whisper
                 return;
             }
 
-            var path = PathInStreamingAssets
-                ? Path.Combine(Application.streamingAssetsPath, ModelPath)
-                : ModelPath;
+            GetParams();
 
-            Ctx = InitFromFile(path, CreateContextParams());
+            Ctx = InitFromFile(Path.Combine(Application.persistentDataPath, ModelPath));
             if (Ctx == IntPtr.Zero)
-                Log.Error(this, $"Error!");
-            else
-                GetParams();
+                Log.Error(this, $"Model Initialization Error!");
         }
         void GetParams()
         {
-            var nativeParams = WhisperNative.whisper_full_default_params(Strategy);
+            ContextParams = WhisperNative.whisper_context_default_params();
 
-            var userData = new WhisperUserData(this);
+            ContextParams.use_gpu = UseGpu;
+            ContextParams.flash_attn = FlashAttention;
 
-            if (nativeParams.new_segment_callback == null &&
-                 nativeParams.new_segment_callback_user_data == IntPtr.Zero)
-            {
-                nativeParams.new_segment_callback = NewSegmentCallbackStatic;
-                nativeParams.new_segment_callback_user_data = GCHandle.ToIntPtr(GCHandle.Alloc(userData));
-            }
-
-            nativeParams.translate = TranslateToEnglish;
-
-            nativeParams.n_threads = 1;
-            nativeParams.n_max_text_ctx = 0;
-            nativeParams.no_context =
-            nativeParams.single_segment =
-            true;
-
-            nativeParams.print_progress =
-            nativeParams.print_realtime =
-            nativeParams.print_timestamps =
-            false;
+            WhisperParams = WhisperNative.whisper_full_default_params(Strategy);
 
             unsafe
             {
-                nativeParams.language = (byte*)Marshal.StringToHGlobalAnsi(Language);
+                WhisperParams.language = (byte*)Marshal.StringToHGlobalAnsi(Language);
             }
 
-            Params = new WhisperParams(nativeParams);
+            WhisperParams.translate = TranslateToEnglish;
 
-            Log.Info(nativeParams, "Default params generated!");
+            WhisperParams.n_threads = ThreadsNumber;
+            WhisperParams.temperature_inc = TemperatureInc;
+            WhisperParams.entropy_thold = EntropyThold;
+            WhisperParams.logprob_thold = LogprobThold;
+            WhisperParams.no_speech_thold = NoSpeechThold;
+
+            WhisperParams.no_context =
+            WhisperParams.no_timestamps =
+            WhisperParams.single_segment =
+            true;
+
+            WhisperParams.print_special =
+            WhisperParams.print_progress =
+            WhisperParams.print_realtime =
+            WhisperParams.print_timestamps =
+            false;
+
+            var userData = new WhisperUserData(this);
+
+            WhisperParams.new_segment_callback = NewSegmentCallbackStatic;
+            WhisperParams.new_segment_callback_user_data = GCHandle.ToIntPtr(GCHandle.Alloc(userData));
+
+            Log.Info(this, "Default params generated!");
         }
         void LogText(WhisperSegment segment)
         {
@@ -147,7 +176,7 @@ namespace Whisper
         {
             while (Actions.TryDequeue(out var task))
             {
-                BusyTimer = BusyTime;
+                Commands--;
 
                 task.RunSynchronously();
             }
@@ -174,14 +203,6 @@ namespace Whisper
 
             return new WhisperSegment(i, text);
         }
-        WhisperContextParams CreateContextParams()
-        {
-            var context = WhisperContextParams.GetDefaultParams();
-            context.UseGpu = UseGpu;
-            context.FlashAttn = FlashAttention;
-
-            return context;
-        }
 
         [MonoPInvokeCallback(typeof(whisper_new_segment_callback))]
         static void NewSegmentCallbackStatic(IntPtr ctx, IntPtr state, int nNew, IntPtr userDataPtr)
@@ -201,55 +222,54 @@ namespace Whisper
             }
         }
 
-        IntPtr InitFromFile(string modelPath, WhisperContextParams contextParams)
+        IntPtr InitFromFile(string modelPath)
         {
-            // load model weights
-            Log.Info(contextParams, $"Trying to load Whisper model from {modelPath}...");
+            Log.Info(this, $"Trying to load Whisper model from {modelPath}...");
+
             var buffer = FileUtils.ReadFile(modelPath);
             if (buffer == null)
                 return IntPtr.Zero;
 
-            return InitFromBuffer(buffer, contextParams);
+            return InitFromBuffer(buffer);
         }
-        IntPtr InitFromBuffer(byte[] buffer, WhisperContextParams contextParams)
+        IntPtr InitFromBuffer(byte[] buffer)
         {
             var ctx = IntPtr.Zero;
-            Log.Info(contextParams, $"Trying to load Whisper model from buffer...");
+
+            Log.Info(this, $"Trying to load Whisper model from buffer...");
+
             if (buffer == null || buffer.Length == 0)
             {
-                Log.Error(contextParams, "Whisper model buffer is null or empty!");
+                Log.Error(this, "Whisper model buffer is null or empty!");
 
                 return ctx;
             }
 
-            // we need to write buffer length as size_t
-            // UIntPtr will work because size_t is size of pointer
             var length = new UIntPtr((uint)buffer.Length);
 
             unsafe
             {
-                // this only works because whisper makes copy of the buffer
                 fixed (byte* bufferPtr = buffer)
                 {
-                    ctx = WhisperNative.whisper_init_from_buffer_with_params((IntPtr)bufferPtr,
-                        length, contextParams.NativeParams);
+                    ctx = WhisperNative.whisper_init_from_buffer_with_params((IntPtr)bufferPtr, length, ContextParams);
                 }
             }
 
             return ctx;
         }
-        async Task<IntPtr> InitFromFileAsync(string modelPath, WhisperContextParams contextParams)
+        async Task<IntPtr> InitFromFileAsync(string modelPath)
         {
-            Log.Info(contextParams, $"Trying to load Whisper model from {modelPath}...");
+            Log.Info(this, $"Trying to load Whisper model from {modelPath}...");
+
             var buffer = await FileUtils.ReadFileAsync(modelPath);
             if (buffer == null)
                 return IntPtr.Zero;
 
-            return await InitFromBufferAsync(buffer, contextParams);
+            return await InitFromBufferAsync(buffer);
         }
-        async Task<IntPtr> InitFromBufferAsync(byte[] buffer, WhisperContextParams contextParams)
+        async Task<IntPtr> InitFromBufferAsync(byte[] buffer)
         {
-            return await Task.Factory.StartNew(() => InitFromBuffer(buffer, contextParams));
+            return await Task.Factory.StartNew(() => InitFromBuffer(buffer));
         }
 
         struct WhisperUserData

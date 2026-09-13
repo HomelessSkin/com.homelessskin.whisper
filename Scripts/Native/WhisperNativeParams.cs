@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using whisper_context_ptr = System.IntPtr;
 using whisper_state_ptr = System.IntPtr;
 using whisper_token = System.Int32;
+
 // ReSharper disable InconsistentNaming
 // ReSharper disable FieldCanBeMadeReadOnly.Local
 // ReSharper disable IdentifierTypo
@@ -11,19 +12,22 @@ using whisper_token = System.Int32;
 
 using whisper_token_ptr = System.IntPtr;
 
-
 namespace Whisper
 {
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    public delegate void whisper_new_segment_callback(whisper_context_ptr ctx, whisper_state_ptr state,
+        int n_new, IntPtr user_data);
+
     public enum WhisperSamplingStrategy
     {
-        WHISPER_SAMPLING_GREEDY = 0, // similar to OpenAI's GreefyDecoder
-        WHISPER_SAMPLING_BEAM_SEARCH = 1, // similar to OpenAI's BeamSearchDecoder
-    };
+        WHISPER_SAMPLING_GREEDY = 0,
+        WHISPER_SAMPLING_BEAM_SEARCH = 1,
+    }
 
-    enum WhisperAlignmentHeadsPreset
+    public enum WhisperAlignmentHeadsPreset
     {
         WHISPER_AHEADS_NONE,
-        WHISPER_AHEADS_N_TOP_MOST,  // All heads from the N-top-most text-layers
+        WHISPER_AHEADS_N_TOP_MOST,
         WHISPER_AHEADS_CUSTOM,
         WHISPER_AHEADS_TINY_EN,
         WHISPER_AHEADS_TINY,
@@ -37,118 +41,117 @@ namespace Whisper
         WHISPER_AHEADS_LARGE_V2,
         WHISPER_AHEADS_LARGE_V3,
         WHISPER_AHEADS_LARGE_V3_TURBO,
-    };
-
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    public delegate void whisper_new_segment_callback(whisper_context_ptr ctx, whisper_state_ptr state,
-        int n_new, IntPtr user_data);
-
-    /// <summary>
-    /// This is direct copy of C++ struct.
-    /// Do not change or add any fields without changing it in whisper.cpp.
-    /// Check <see cref="WhisperTokenData"/> for more information.
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
-    public struct WhisperNativeTokenData
-    {
-        public whisper_token id;  // token id
-        public whisper_token tid; // forced timestamp token id
-
-        public float p;           // probability of the token
-        public float plog;        // log probability of the token
-        public float pt;          // probability of the timestamp token
-        public float ptsum;       // sum of probabilities of all timestamp tokens
-
-        // token-level timestamp data
-        // do not use if you haven't computed token-level timestamps
-        public ulong t0;        // start time of the token
-        public ulong t1;        //   end time of the token
-
-        // [EXPERIMENTAL] Token-level timestamps with DTW
-        // do not use if you haven't computed token-level timestamps with dtw
-        // Roughly corresponds to the moment in audio in which the token was output
-        ulong t_dtw;
-
-        public float vlen;        // voice length of the token
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    struct WhisperNativeAheads
+    public struct WhisperNativeTokenData
+    {
+        public whisper_token id;
+        public whisper_token tid;
+
+        public float p;
+        public float plog;
+        public float pt;
+        public float ptsum;
+
+        // token-level timestamp data (int64_t ‚ C)
+        public long t0;
+        public long t1;
+
+        // [EXPERIMENTAL] Token-level timestamps with DTW (int64_t ‚ C)
+        public long t_dtw;
+
+        public float vlen;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WhisperNativeAheads
     {
         UIntPtr n_heads;
         IntPtr heads;
     }
 
-    /// <summary>
-    /// This is direct copy of C++ struct.
-    /// Do not change or add any fields without changing it in whisper.cpp.
-    /// Do not change it in runtime directly, use <see cref="WhisperContextParams"/>.
-    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct WhisperNativeContextParams
     {
         [MarshalAs(UnmanagedType.U1)] public bool use_gpu;
         [MarshalAs(UnmanagedType.U1)] public bool flash_attn;
-        int gpu_device;  // CUDA device
+        int gpu_device;
 
         // [EXPERIMENTAL] Token-level timestamps with DTW
-        [MarshalAs(UnmanagedType.U1)] bool dtw_token_timestamps;
+        [MarshalAs(UnmanagedType.U1)] public bool dtw_token_timestamps;
         WhisperAlignmentHeadsPreset dtw_aheads_preset;
 
         int dtw_n_top;
         WhisperNativeAheads dtw_aheads;
 
-        UIntPtr dtw_mem_size; // TODO: remove
-    };
+        UIntPtr dtw_mem_size;
+    }
 
-    /// <summary>
-    /// This is direct copy of C++ struct.
-    /// Do not change or add any fields without changing it in whisper.cpp.
-    /// Do not change it in runtime directly, use <see cref="WhisperParams"/>.
-    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct greedy_struct
+    {
+        int best_of;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct beam_search_struct
+    {
+        int beam_size;
+        float patience;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WhisperVadParams
+    {
+        public float threshold;
+        public int min_speech_duration_ms;
+        public int min_silence_duration_ms;
+        public float max_speech_duration_s;
+        public int speech_pad_ms;
+        public float samples_overlap;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public unsafe struct WhisperNativeParams
     {
         public WhisperSamplingStrategy strategy;
 
         public int n_threads;
-        public int n_max_text_ctx; // max tokens to use from past text as prompt for the decoder
-        public int offset_ms; // start offset in ms
-        public int duration_ms; // audio duration to process in ms
+        public int n_max_text_ctx;
+        public int offset_ms;
+        public int duration_ms;
 
         [MarshalAs(UnmanagedType.U1)] public bool translate;
-        [MarshalAs(UnmanagedType.U1)] public bool no_context; // do not use past transcription (if any) as initial prompt for the decoder
-        [MarshalAs(UnmanagedType.U1)] bool no_timestamps;     // do not generate timestamps
-        [MarshalAs(UnmanagedType.U1)] public bool single_segment; // force single segment output (useful for streaming)
-        [MarshalAs(UnmanagedType.U1)] public bool print_special; // print special tokens (e.g. <SOT>, <EOT>, <BEG>, etc.)
-        [MarshalAs(UnmanagedType.U1)] public bool print_progress; // print progress information
-        [MarshalAs(UnmanagedType.U1)] public bool print_realtime; // print results from within whisper.cpp (avoid it, use callback instead)
-        [MarshalAs(UnmanagedType.U1)] public bool print_timestamps; // print timestamps for each text segment when printing realtime
+        [MarshalAs(UnmanagedType.U1)] public bool no_context;
+        [MarshalAs(UnmanagedType.U1)] public bool no_timestamps;
+        [MarshalAs(UnmanagedType.U1)] public bool single_segment;
+        [MarshalAs(UnmanagedType.U1)] public bool print_special;
+        [MarshalAs(UnmanagedType.U1)] public bool print_progress;
+        [MarshalAs(UnmanagedType.U1)] public bool print_realtime;
+        [MarshalAs(UnmanagedType.U1)] public bool print_timestamps;
 
         // [EXPERIMENTAL] token-level timestamps
-        [MarshalAs(UnmanagedType.U1)] public bool token_timestamps; // enable token-level timestamps
-        float thold_pt; // timestamp token probability threshold (~0.01)
-        float thold_ptsum; // timestamp token sum probability threshold (~0.01)
-        int max_len; // max segment length in characters
-        [MarshalAs(UnmanagedType.U1)] bool split_on_word; // split on word rather than on token (when used with max_len)
-        int max_tokens; // max tokens per segment (0 = no limit)
+        [MarshalAs(UnmanagedType.U1)] public bool token_timestamps;
+        float thold_pt;
+        float thold_ptsum;
+        int max_len;
+        [MarshalAs(UnmanagedType.U1)] bool split_on_word;
+        int max_tokens;
 
         // [EXPERIMENTAL] speed-up techniques
-        // note: these can significantly reduce the quality of the output
-        [MarshalAs(UnmanagedType.U1)] bool debug_mode;        // enable debug_mode provides extra info (eg. Dump log_mel)
-        public int audio_ctx; // overwrite the audio context size (0 = use default)
+        [MarshalAs(UnmanagedType.U1)] bool debug_mode;
+        public int audio_ctx;
 
         // [EXPERIMENTAL] [TDRZ] tinydiarize
-        [MarshalAs(UnmanagedType.U1)] bool tdrz_enable;       // enable tinydiarize speaker turn detection
+        [MarshalAs(UnmanagedType.U1)] bool tdrz_enable;
 
         // A regular expression that matches tokens to suppress
         byte* suppress_regex;
 
         // tokens to provide to the whisper decoder as initial prompt
-        // these are prepended to any existing text context from a previous call
-        // use whisper_tokenize() to convert text to tokens
-        // maximum of whisper_n_text_ctx()/2 tokens are used (typically 224)
         public byte* initial_prompt;
+        [MarshalAs(UnmanagedType.U1)] public bool carry_initial_prompt; // ÕŒ¬Œ≈ ‚ 1.9.x
         whisper_token_ptr prompt_tokens;
         int prompt_n_tokens;
 
@@ -157,35 +160,20 @@ namespace Whisper
         [MarshalAs(UnmanagedType.U1)] bool detect_language;
 
         // common decoding parameters:
-        [MarshalAs(UnmanagedType.U1)] public bool suppress_blank; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/decoding.py#L89
-        [MarshalAs(UnmanagedType.U1)] public bool suppress_non_speech_tokens; // ref: https://github.com/openai/whisper/blob/7858aa9c08d98f75575035ecd6481f462d66ca27/whisper/tokenizer.py#L224-L253
+        [MarshalAs(UnmanagedType.U1)] public bool suppress_blank;
+        [MarshalAs(UnmanagedType.U1)] public bool suppress_nst; // œ≈–≈»Ã≈ÕŒ¬¿ÕŒ ËÁ suppress_non_speech_tokens
 
-        float temperature; // initial decoding temperature, ref: https://ai.stackexchange.com/a/32478
-        float max_initial_ts; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/decoding.py#L97
-        float length_penalty; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/transcribe.py#L267
+        float temperature;
+        float max_initial_ts;
+        float length_penalty;
 
         // fallback parameters
-        // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/transcribe.py#L274-L278
-        float temperature_inc;
-        float entropy_thold; // similar to OpenAI's "compression_ratio_threshold"
-        float logprob_thold;
-        float no_speech_thold; // TODO: not implemented
-
-        [StructLayout(LayoutKind.Sequential)]
-        struct greedy_struct
-        {
-            int best_of; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/transcribe.py#L264
-        }
+        public float temperature_inc;
+        public float entropy_thold;
+        public float logprob_thold;
+        public float no_speech_thold;
 
         greedy_struct greedy;
-
-        [StructLayout(LayoutKind.Sequential)]
-        struct beam_search_struct
-        {
-            int beam_size; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/transcribe.py#L265
-            float patience; // TODO: not implemented, ref: https://arxiv.org/pdf/2204.05424.pdf
-        }
-
         beam_search_struct beam_search;
 
         // called for every newly generated text segment
@@ -212,5 +200,10 @@ namespace Whisper
         UIntPtr n_grammar_rules;
         UIntPtr i_start_rule;
         float grammar_penalty;
+
+        // Voice Activity Detection (VAD) params ó ÕŒ¬€… ¡ÀŒ  ‚ 1.9.x
+        [MarshalAs(UnmanagedType.U1)] public bool vad;
+        public byte* vad_model_path;
+        public WhisperVadParams vad_params;
     }
 }

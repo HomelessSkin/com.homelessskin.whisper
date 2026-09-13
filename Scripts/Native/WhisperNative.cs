@@ -7,12 +7,9 @@ using whisper_token = System.Int32;
 
 namespace Whisper
 {
-    /// <summary>
-    /// Bindings to native whisper.cpp functions.
-    /// </summary>
     public static unsafe class WhisperNative
     {
-        const string LibraryName = "libwhisper";
+        const string LibraryName = "whisper";
 
         [DllImport(LibraryName)]
         public static extern whisper_context_ptr whisper_init_from_buffer_with_params(IntPtr buffer,
