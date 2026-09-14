@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -7,6 +8,10 @@ using System.Threading.Tasks;
 using AOT;
 
 using Core;
+
+using Input;
+
+using UI;
 
 using Unity.Collections;
 
@@ -16,10 +21,22 @@ namespace Whisper
 {
     public class WhisperManager : MonoBehaviour
     {
-        [Header("Model")]
-        [SerializeField] string ModelPath = "Whisper/ggml-tiny.bin";
+        [MonoPInvokeCallback(typeof(whisper_new_segment_callback))]
+        static void NewSegmentCallbackStatic(IntPtr ctx, IntPtr state, int nNew, IntPtr userDataPtr)
+        {
+            var userData = (WhisperUserData)GCHandle.FromIntPtr(userDataPtr).Target;
+            userData.Wrapper.NewSegmentCallback(nNew);
+        }
 
-        [Header("Inference")]
+        [SerializeField] string ModelPath = "Whisper/";
+
+        bool IsWorking = false;
+
+        IntPtr Ctx = IntPtr.Zero;
+        WhisperNativeContextParams ContextParams;
+        WhisperNativeParams WhisperParams;
+
+        [Space]
         [SerializeField] WhisperSamplingStrategy Strategy = WhisperSamplingStrategy.WHISPER_SAMPLING_GREEDY;
         [SerializeField] bool TranslateToEnglish;
         [SerializeField] string Language = "en";
@@ -35,6 +52,23 @@ namespace Whisper
         [SerializeField] float BusyTime = 5f;
 
         bool isBusy;
+
+        int Commands = 0;
+        float BusyTimer;
+
+        ConcurrentQueue<Task> Actions = new ConcurrentQueue<Task>();
+
+        [Space]
+        [SerializeField] RectTransform ModelSelectionPanel;
+        [SerializeField] RectTransform ModelSelectionContent;
+        [SerializeField] GameObject ModelButtonPrefab;
+
+        List<MenuButton> ModelButtons = new List<MenuButton>();
+
+        [Space]
+        [SerializeField] VoiceCommander Commander;
+
+        bool IsLoaded => Ctx != IntPtr.Zero;
         bool IsBusy
         {
             get => isBusy;
@@ -52,21 +86,6 @@ namespace Whisper
             }
         }
 
-        int Commands = 0;
-        float BusyTimer;
-
-        WhisperNativeContextParams ContextParams;
-        WhisperNativeParams WhisperParams;
-
-        ConcurrentQueue<Task> Actions = new ConcurrentQueue<Task>();
-
-        bool IsLoaded => Ctx != IntPtr.Zero;
-        IntPtr Ctx = IntPtr.Zero;
-
-        void Start()
-        {
-            InitModel();
-        }
         void Update()
         {
             QueueUpdate();
@@ -78,13 +97,40 @@ namespace Whisper
         }
         void OnDestroy()
         {
-            if (IsLoaded)
-                WhisperNative.whisper_free(Ctx);
+            if (IsWorking)
+                UnloadModel();
         }
 
+        public void SwitchWorking()
+        {
+            if (!IsWorking)
+                OpenModelFolderSelection();
+            else
+            {
+                IsWorking = false;
+
+                UnloadModel();
+            }
+        }
+        public void InitModel(OuterInput input)
+        {
+            GetParams();
+
+            Ctx = InitFromFile(input.Message);
+            if (Ctx == IntPtr.Zero)
+                Log.Error(this, $"Model {input.Agent} Initialization Error!");
+            else
+            {
+                IsWorking = true;
+
+                Log.Info(this, $"Model {input.Agent} initialized.");
+            }
+
+            CloseModelFolderSelection();
+        }
         public async void GetText(NativeArray<float> samples, int frequency, int channels)
         {
-            if (!CheckLoaded() || IsBusy || samples.Length < 20000)
+            if (!IsWorking || IsBusy || samples.Length < 20000)
                 return;
 
             IsBusy = true;
@@ -93,40 +139,63 @@ namespace Whisper
             await InferenceWhisper(samples);
         }
 
-        async Task InferenceWhisper(NativeArray<float> samples)
+        void OpenModelFolderSelection()
         {
-            var array = samples.ToArray();
-
-            Log.Info(this, $"Starting Inference with {samples.Length} samples.");
-
-            await Task.Run(() =>
+            var folder = Path.Combine(Application.persistentDataPath, ModelPath);
+            if (!Directory.Exists(folder))
             {
-                unsafe
-                {
-                    fixed (float* samplesPtr = array)
-                    {
-                        var code = WhisperNative.whisper_full(Ctx, WhisperParams, samplesPtr, samples.Length);
-                        if (code != 0)
-                            Log.Error(this, $"Whisper failed to process data! Error code: {code}.");
-                    }
-                }
-            });
-        }
+                Directory.CreateDirectory(folder);
 
-        void InitModel()
-        {
-            if (IsLoaded)
-            {
-                Log.Warning(this, "Whisper model is already loaded and ready for use!");
+                Log.Warning(this, $"Model Folder was created, put Model Files inside\n{folder}\nor else!");
 
                 return;
             }
 
-            GetParams();
+            var models = Directory.GetFiles(folder, "*.bin");
+            if (models == null || models.Length == 0)
+            {
+                Log.Warning(this, $"Path is empty!\n{folder}");
 
-            Ctx = InitFromFile(Path.Combine(Application.persistentDataPath, ModelPath));
-            if (Ctx == IntPtr.Zero)
-                Log.Error(this, $"Model Initialization Error!");
+                return;
+            }
+
+            for (int m = 0; m < models.Length; m++)
+            {
+                var go = Instantiate(ModelButtonPrefab, ModelSelectionContent);
+                var button = go.GetComponent<MenuButton>();
+                var name = models[m].Replace(folder, "");
+                button.SetLabel(name);
+                button.AddInput(new OuterInput
+                {
+                    Title = "Model Picking",
+                    Agent = name,
+                    Message = models[m]
+                });
+
+                ModelButtons.Add(button);
+            }
+
+            ModelSelectionPanel.gameObject.SetActive(true);
+        }
+        void CloseModelFolderSelection()
+        {
+            ModelSelectionPanel.gameObject.SetActive(false);
+
+            for (int m = 0; m < ModelButtons.Count; m++)
+                Destroy(ModelButtons[m].gameObject);
+
+            ModelButtons.Clear();
+        }
+        void UnloadModel()
+        {
+            if (IsLoaded)
+            {
+                WhisperNative.whisper_free(Ctx);
+
+                Log.Info(this, $"Model unloaded.");
+            }
+            else
+                Log.Error(this, $"Model Unloading Error!.");
         }
         void GetParams()
         {
@@ -168,9 +237,11 @@ namespace Whisper
 
             Log.Info(this, "Default params generated!");
         }
-        void LogText(WhisperSegment segment)
+        void ProcessVoiceText(WhisperSegment segment)
         {
             Log.Info(this, $"{segment.Text}");
+
+            Commander.Process(segment.Text);
         }
         void QueueUpdate()
         {
@@ -185,31 +256,6 @@ namespace Whisper
         {
             Actions.Enqueue(new Task(action));
         }
-        bool CheckLoaded()
-        {
-            if (!IsLoaded)
-            {
-                Log.Error(this, "Whisper model isn't loaded! Init Whisper model first!");
-
-                return false;
-            }
-
-            return true;
-        }
-        WhisperSegment GetSegment(int i)
-        {
-            var textPtr = WhisperNative.whisper_full_get_segment_text(Ctx, i);
-            var text = TextUtils.StringFromNativeUtf8(textPtr);
-
-            return new WhisperSegment(i, text);
-        }
-
-        [MonoPInvokeCallback(typeof(whisper_new_segment_callback))]
-        static void NewSegmentCallbackStatic(IntPtr ctx, IntPtr state, int nNew, IntPtr userDataPtr)
-        {
-            var userData = (WhisperUserData)GCHandle.FromIntPtr(userDataPtr).Target;
-            userData.Wrapper.NewSegmentCallback(nNew);
-        }
         void NewSegmentCallback(int nNew)
         {
             var nSegments = WhisperNative.whisper_full_n_segments(Ctx);
@@ -218,14 +264,11 @@ namespace Whisper
             for (var i = s0; i < nSegments; i++)
             {
                 var segment = GetSegment(i);
-                QueueActions(() => LogText(segment));
+                QueueActions(() => ProcessVoiceText(segment));
             }
         }
-
         IntPtr InitFromFile(string modelPath)
         {
-            Log.Info(this, $"Trying to load Whisper model from {modelPath}...");
-
             var buffer = FileUtils.ReadFile(modelPath);
             if (buffer == null)
                 return IntPtr.Zero;
@@ -235,8 +278,6 @@ namespace Whisper
         IntPtr InitFromBuffer(byte[] buffer)
         {
             var ctx = IntPtr.Zero;
-
-            Log.Info(this, $"Trying to load Whisper model from buffer...");
 
             if (buffer == null || buffer.Length == 0)
             {
@@ -256,6 +297,32 @@ namespace Whisper
             }
 
             return ctx;
+        }
+        WhisperSegment GetSegment(int i)
+        {
+            var textPtr = WhisperNative.whisper_full_get_segment_text(Ctx, i);
+            var text = TextUtils.StringFromNativeUtf8(textPtr);
+
+            return new WhisperSegment(i, text);
+        }
+        async Task InferenceWhisper(NativeArray<float> samples)
+        {
+            var array = samples.ToArray();
+
+            Log.Info(this, $"Starting Inference with {samples.Length} samples.");
+
+            await Task.Run(() =>
+            {
+                unsafe
+                {
+                    fixed (float* samplesPtr = array)
+                    {
+                        var code = WhisperNative.whisper_full(Ctx, WhisperParams, samplesPtr, samples.Length);
+                        if (code != 0)
+                            Log.Error(this, $"Whisper failed to process data! Error code: {code}.");
+                    }
+                }
+            });
         }
         async Task<IntPtr> InitFromFileAsync(string modelPath)
         {

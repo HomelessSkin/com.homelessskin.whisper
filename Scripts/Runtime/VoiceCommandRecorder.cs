@@ -55,35 +55,22 @@ namespace Whisper
         [SerializeField] string MicrophoneDefaultLabel = "Default microphone";
         [SerializeField] TMP_Dropdown MicrophoneDropdown;
 
-        string SelectedMicDevice;
+        int SelectedMicDevice;
+        string MicName => MicrophoneDropdown.options[SelectedMicDevice].text;
 
         [Space]
         [SerializeField] WhisperManager Manager;
 
         void Start()
         {
-            MicrophoneDropdown.options = Microphone
-                .devices
-                .Prepend(MicrophoneDefaultLabel)
-                .Select(text => new TMP_Dropdown.OptionData(text))
-                .ToList();
-
-            MicrophoneDropdown.value = 0;
+            RefreshMicrophones();
         }
         void Update()
         {
-            if (MicClip == null)
-            {
-                if (!string.IsNullOrEmpty(SelectedMicDevice))
-                {
-                    MicClip = Microphone.Start(SelectedMicDevice, true, BufferLengthSec, SampleRate);
-                    TotalSamples = MicClip.samples * MicClip.channels;
-                }
-                else
-                    return;
-            }
+            if (!MicClip)
+                return;
 
-            var currentPos = Microphone.GetPosition(SelectedMicDevice);
+            var currentPos = Microphone.GetPosition(MicName);
             var dB = GetCurrentDb(currentPos);
 
             MicLevel.anchoredPosition = MicLevelOrigin + dB * MicLevelVelocity;
@@ -129,14 +116,39 @@ namespace Whisper
         }
         void OnDestroy()
         {
-            if (Microphone.IsRecording(SelectedMicDevice))
-                Microphone.End(SelectedMicDevice);
+            if (Microphone.IsRecording(MicName))
+                Microphone.End(MicName);
         }
 
+        public void RefreshMicrophones()
+        {
+            MicrophoneDropdown.options = Microphone
+                .devices
+                .Prepend(MicrophoneDefaultLabel)
+                .Select(text => new TMP_Dropdown.OptionData(text))
+                .ToList();
+
+            if (SelectedMicDevice < MicrophoneDropdown.options.Count)
+                MicrophoneDropdown.value = SelectedMicDevice;
+            else
+                MicrophoneDropdown.value = SelectedMicDevice = 0;
+        }
         public void OnMicrophoneChanged(int ind)
         {
-            var opt = MicrophoneDropdown.options[ind];
-            SelectedMicDevice = opt.text == MicrophoneDefaultLabel ? null : opt.text;
+            if (Microphone.IsRecording(MicName))
+                Microphone.End(MicName);
+
+            SelectedMicDevice = ind;
+            if (SelectedMicDevice > 0)
+            {
+                MicClip = Microphone.Start(MicName, true, BufferLengthSec, SampleRate);
+                TotalSamples = MicClip.samples * MicClip.channels;
+            }
+            else
+            {
+                MicLevel.anchoredPosition = MicLevelOrigin;
+                MicLevelText.text = "0.0 dB";
+            }
         }
 
         void EndRecording(int endSample)
@@ -174,7 +186,13 @@ namespace Whisper
             Manager.GetText(result, MicClip.frequency, MicClip.channels);
 
             if (Echo)
-                PlayAudioAndDestroy.Play(AudioClip.Create("echo", result.Length, MicClip.channels, MicClip.frequency, false), Vector3.zero);
+            {
+                var clip = AudioClip.Create("echo", result.Length, MicClip.channels, MicClip.frequency, false);
+                if (clip.SetData(result, 0))
+                    PlayAudioAndDestroy.Play(clip, Vector3.zero);
+                else
+                    Destroy(clip);
+            }
 
             result.Dispose();
             fullBuffer.Dispose();
