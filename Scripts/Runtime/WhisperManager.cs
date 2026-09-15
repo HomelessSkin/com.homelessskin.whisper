@@ -49,6 +49,7 @@ namespace Whisper
         [SerializeField] float NoSpeechThold;
 
         [Space]
+        [SerializeField] int MinFramesCount = 20000;
         [SerializeField] float BusyTime = 5f;
 
         bool isBusy;
@@ -130,7 +131,7 @@ namespace Whisper
         }
         public async void GetText(NativeArray<float> samples, int frequency, int channels)
         {
-            if (!IsWorking || IsBusy || samples.Length < 20000)
+            if (!IsWorking || IsBusy || samples.Length < MinFramesCount)
                 return;
 
             IsBusy = true;

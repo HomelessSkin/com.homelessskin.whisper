@@ -7,5 +7,10 @@
   "author": {
     "name": "HomelessSkin"
   },
-  "hideInEditor": false
+  "hideInEditor": false,
+  "dependencies": {
+    "com.homelessskin.core": "0.1.0",
+    "com.homelessskin.input": "0.1.0",
+    "com.homelessskin.ui": "0.1.0"
+  }
 }

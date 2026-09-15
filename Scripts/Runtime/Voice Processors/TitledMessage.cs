@@ -13,10 +13,20 @@ namespace Whisper
     [CreateAssetMenu(fileName = "Titled Message", menuName = "Whisper/Voice Processors/Titled Message")]
     public class TitledMessage : VoiceProcessor
     {
-        [Space]
-        public string Title;
+        public override string JSONPath => "Titled Messages/";
+        public override VoiceCommand Command => command;
 
-        public override bool Process(string data)
+        [Space]
+        public TitledMessageCommand command;
+    }
+
+    [Serializable]
+    public class TitledMessageCommand : VoiceCommand
+    {
+        [Space]
+        [LogInfo] public string Title;
+
+        public override bool Invoke(string data)
         {
             var message = data.Trim().ToLower();
             if (message.StartsWith(Title, StringComparison.OrdinalIgnoreCase))

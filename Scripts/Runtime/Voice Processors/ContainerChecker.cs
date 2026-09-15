@@ -1,3 +1,5 @@
+using System;
+
 using Core;
 
 using Unity.Entities;
@@ -9,10 +11,20 @@ namespace Whisper
     [CreateAssetMenu(fileName = "Container Checker", menuName = "Whisper/Voice Processors/Container Checker")]
     public class ContainerChecker : VoiceProcessor
     {
-        [Space]
-        public string[] Keys;
+        public override string JSONPath => "Container Checkers/";
+        public override VoiceCommand Command => command;
 
-        public override bool Process(string data)
+        [Space]
+        public ContainerCheckerCommand command;
+    }
+
+    [Serializable]
+    public class ContainerCheckerCommand : VoiceCommand
+    {
+        [Space]
+        [LogInfo] public string[] Keys;
+
+        public override bool Invoke(string data)
         {
             var contains = true;
             for (int k = 0; k < Keys.Length; k++)
