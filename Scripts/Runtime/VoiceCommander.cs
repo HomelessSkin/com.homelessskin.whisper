@@ -16,13 +16,20 @@ namespace Whisper
         [Space]
         [SerializeField] VoiceProcessor[] Processors;
 
-        public List<VoiceCommand> Commands = new List<VoiceCommand>();
+        List<VoiceCommand> Commands = new List<VoiceCommand>();
 
         [Space]
         [SerializeField] char[] Trimming;
 
         void Start()
         {
+            ReloadCommands();
+        }
+
+        public void ReloadCommands()
+        {
+            Commands.Clear();
+
             var path = Path.Combine(Application.persistentDataPath, JSONFolder);
             var folders = new List<string>();
             for (int p = 0; p < Processors.Length; p++)
@@ -51,27 +58,26 @@ namespace Whisper
                         AddCommand(files[f], type);
                 }
             }
-        }
 
+            void AddCommand(string file, Type type)
+            {
+                var text = File.ReadAllText(file);
+                if (!string.IsNullOrEmpty(text))
+                {
+                    var obj = JsonUtility.FromJson(text, type);
+                    Commands.Add(obj as VoiceCommand);
+
+                    Log.Info(this, $"Added Command of Type: {type.FullName}");
+                    Log.Object(this, obj as ILogTarget);
+                }
+            }
+        }
         public void Process(string data)
         {
             data = data.Trim(Trimming).ToLower();
             for (int c = 0; c < Commands.Count; c++)
                 if (Commands[c].Invoke(data))
                     return;
-        }
-
-        void AddCommand(string file, Type type)
-        {
-            var text = File.ReadAllText(file);
-            if (!string.IsNullOrEmpty(text))
-            {
-                var obj = JsonUtility.FromJson(text, type);
-                Commands.Add(obj as VoiceCommand);
-
-                Log.Info(this, $"Added Command of Type: {type.FullName}");
-                Log.Object(this, obj as ILogTarget);
-            }
         }
 
 #if UNITY_EDITOR

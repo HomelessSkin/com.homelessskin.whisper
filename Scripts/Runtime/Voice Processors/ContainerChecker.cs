@@ -27,10 +27,10 @@ namespace Whisper
         public override bool Invoke(string data)
         {
             var contains = true;
+            var arr = data.Split();
             for (int k = 0; k < Keys.Length; k++)
             {
-                contains &= data.Contains(Keys[k].ToLower());
-
+                contains &= Contains(Keys[k].ToLower());
                 if (!contains)
                     break;
             }
@@ -39,6 +39,15 @@ namespace Whisper
                 Sys.Add_M(Input, World.DefaultGameObjectInjectionWorld.EntityManager);
 
             return contains;
+
+            bool Contains(string key)
+            {
+                for (int a = 0; a < arr.Length; a++)
+                    if (arr[a].ToLower().Equals(key))
+                        return true;
+
+                return false;
+            }
         }
     }
 }
