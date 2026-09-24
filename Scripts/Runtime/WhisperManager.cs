@@ -28,6 +28,9 @@ namespace Whisper
             userData.Wrapper.NewSegmentCallback(nNew);
         }
 
+        [SerializeField] Commander Commander;
+
+        [Space]
         [SerializeField] string ModelPath = "Whisper/";
 
         bool IsWorking = false;
@@ -65,9 +68,6 @@ namespace Whisper
         [SerializeField] GameObject ModelButtonPrefab;
 
         List<MenuButton> ModelButtons = new List<MenuButton>();
-
-        [Space]
-        [SerializeField] VoiceCommander Commander;
 
         bool IsLoaded => Ctx != IntPtr.Zero;
         bool IsBusy
@@ -240,8 +240,6 @@ namespace Whisper
         }
         void ProcessVoiceText(WhisperSegment segment)
         {
-            Log.Info(this, $"{segment.Text}");
-
             Commander.Process(segment.Text);
         }
         void QueueUpdate()
