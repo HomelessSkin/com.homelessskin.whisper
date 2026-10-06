@@ -240,7 +240,8 @@ namespace Whisper
         }
         void ProcessVoiceText(WhisperSegment segment)
         {
-            Commander.Process(segment.Text);
+            var text = segment.Text;
+            Commander.Process(ref text);
         }
         void QueueUpdate()
         {
