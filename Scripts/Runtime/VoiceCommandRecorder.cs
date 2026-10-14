@@ -73,7 +73,9 @@ namespace Whisper
             var currentPos = Microphone.GetPosition(MicName);
             var dB = GetCurrentDb(currentPos);
 
-            MicLevel.anchoredPosition = MicLevelOrigin + dB * MicLevelVelocity;
+            var pos = MicLevelOrigin + dB * MicLevelVelocity;
+            pos.y = Mathf.Clamp(pos.y, 10f, MicLevelOrigin.y);
+            MicLevel.anchoredPosition = pos;
             MicLevelText.text = dB.ToString("0.0 dB");
 
             switch (state)
